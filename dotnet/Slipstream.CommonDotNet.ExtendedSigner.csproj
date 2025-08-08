@@ -22,12 +22,12 @@
           PackagePath="runtimes\win-x64\native\">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-<!--     <None Include="..\target\x86_64-unknown-linux-gnu\release\librust_crypto_lib_base.so" -->
-<!--           TargetPath="runtimes\linux-x64\native\%(Filename)%(Extension)" -->
-<!--           Pack="true" -->
-<!--           PackagePath="runtimes\linux-x64\native\"> -->
-<!--       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> -->
-<!--     </None> -->
+    <None Include="..\target\x86_64-unknown-linux-gnu\release\librust_crypto_lib_base.so"
+          TargetPath="runtimes\linux-x64\native\%(Filename)%(Extension)"
+          Pack="true"
+          PackagePath="runtimes\linux-x64\native\">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
