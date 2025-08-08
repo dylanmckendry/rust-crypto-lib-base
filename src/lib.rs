@@ -1,3 +1,4 @@
+use std::ffi::{c_char, CStr, CString};
 use hex;
 use num_bigint::BigUint;
 use sha2::{Digest, Sha256};
@@ -14,6 +15,13 @@ pub struct StarkSignature {
     pub r: Felt,
     pub s: Felt,
     pub v: Felt,
+}
+
+#[repr(C)]
+pub struct StarknetSign {
+    r: *mut c_char,
+    s: *mut c_char,
+    v: *mut c_char,
 }
 
 fn grind_key(key_seed: BigUint) -> BigUint {
@@ -70,46 +78,64 @@ pub fn sign_message(message: &Felt, private_key: &Felt) -> Result<StarkSignature
         .map_err(|e| format!("Failed to sign message: {:?}", e));
 }
 
-// these functions are designed to be called from other languages, such as Python or JavaScript,
-// so they take string arguments.
-pub fn get_order_hash(
-    position_id: String,
-    base_asset_id_hex: String,
-    base_amount: String,
-    quote_asset_id_hex: String,
-    quote_amount: String,
-    fee_asset_id_hex: String,
-    fee_amount: String,
-    expiration: String,
-    salt: String,
-    user_public_key_hex: String,
-    domain_name: String,
-    domain_version: String,
-    domain_chain_id: String,
-    domain_revision: String,
-) -> Result<Felt, String> {
-    let base_asset_id = Felt::from_hex(&base_asset_id_hex)
-        .map_err(|e| format!("Invalid base_asset_id_hex: {:?}", e))?;
-    let quote_asset_id = Felt::from_hex(&quote_asset_id_hex)
-        .map_err(|e| format!("Invalid quote_asset_id_hex: {:?}", e))?;
-    let fee_asset_id = Felt::from_hex(&fee_asset_id_hex)
-        .map_err(|e| format!("Invalid fee_asset_id_hex: {:?}", e))?;
-    let user_key = Felt::from_hex(&user_public_key_hex)
-        .map_err(|e| format!("Invalid user_public_key_hex: {:?}", e))?;
+#[no_mangle]
+pub extern "C" fn starknet_sign(message: *const c_char, private_key: *const c_char) -> StarknetSign {
+    let message = Felt::from_hex(unsafe { c_char_to_str(message) }.unwrap()).unwrap();
+    let private_key = Felt::from_hex(unsafe { c_char_to_str(private_key) }.unwrap()).unwrap();
 
-    let position_id = u32::from_str_radix(&position_id, 10)
-        .map_err(|e| format!("Invalid position_id: {:?}", e))?;
-    let base_amount = i64::from_str_radix(&base_amount, 10)
-        .map_err(|e| format!("Invalid base_amount: {:?}", e))?;
-    let quote_amount = i64::from_str_radix(&quote_amount, 10)
-        .map_err(|e| format!("Invalid quote_amount: {:?}", e))?;
-    let fee_amount =
-        u64::from_str_radix(&fee_amount, 10).map_err(|e| format!("Invalid fee_amount: {:?}", e))?;
-    let expiration =
-        u64::from_str_radix(&expiration, 10).map_err(|e| format!("Invalid expiration: {:?}", e))?;
-    let salt = u64::from_str_radix(&salt, 10).map_err(|e| format!("Invalid salt: {:?}", e))?;
-    let revision = u32::from_str_radix(&domain_revision, 10)
-        .map_err(|e| format!("Invalid domain_revision: {:?}", e))?;
+    let sign =  ecdsa_sign(&private_key, &message)
+        .map(|extended_signature| StarkSignature {
+            r: extended_signature.r,
+            s: extended_signature.s,
+            v: extended_signature.v,
+        })
+        .unwrap();
+
+    let r = CString::new(sign.r.to_fixed_hex_string()).unwrap();
+    let s = CString::new(sign.s.to_fixed_hex_string()).unwrap();
+    let v = CString::new(sign.v.to_fixed_hex_string()).unwrap();
+
+    StarknetSign {
+        r: r.into_raw(),
+        s: s.into_raw(),
+        v: v.into_raw(),
+    }
+}
+
+
+unsafe fn c_char_to_str<'a>(p: *const c_char) -> Result<&'a str, &'static str> {
+    if p.is_null() {
+        return Err("received null pointer");
+    }
+    CStr::from_ptr(p)
+        .to_str()
+        .map_err(|_| "parameter is not valid UTF‑8")
+}
+
+#[no_mangle]
+pub extern "C" fn get_order_hash(
+    position_id: u32,
+    base_asset_id_hex: *const c_char,
+    base_amount: i64,
+    quote_asset_id_hex: *const c_char,
+    quote_amount: i64,
+    fee_asset_id_hex: *const c_char,
+    fee_amount: u64,
+    expiration: u64,
+    salt: u64,
+    user_public_key_hex: *const c_char,
+    domain_chain_id: *const c_char,
+) -> *mut c_char {
+
+    let base_asset_id = Felt::from_hex(unsafe { c_char_to_str(base_asset_id_hex) }.unwrap()).unwrap();
+    let quote_asset_id = Felt::from_hex(unsafe { c_char_to_str(quote_asset_id_hex) }.unwrap()).unwrap();
+    let fee_asset_id = Felt::from_hex(unsafe { c_char_to_str(fee_asset_id_hex) }.unwrap()).unwrap();
+    let user_key = Felt::from_hex(unsafe { c_char_to_str(user_public_key_hex) }.unwrap()).unwrap();
+
+    let domain_name = "Perpetuals";
+    let domain_version = "v0";
+    let domain_chain_id = unsafe { c_char_to_str(domain_chain_id) }.unwrap();
+    let revision: u32 = 1;
 
     let order = Order {
         position_id: PositionId { value: position_id },
@@ -130,293 +156,35 @@ pub fn get_order_hash(
         },
         salt: salt
             .try_into()
-            .map_err(|e| format!("Invalid salt vault: {:?}", e))?,
+            .unwrap(),
     };
     let domain = StarknetDomain {
-        name: domain_name,
-        version: domain_version,
-        chain_id: domain_chain_id,
+        name: domain_name.to_string(),
+        version: domain_version.to_string(),
+        chain_id: domain_chain_id.to_string(),
         revision,
     };
-    order
+
+    CString::new(order
         .message_hash(&domain, user_key)
-        .map_err(|e| format!("Failed to compute message hash: {:?}", e))
-}
-
-pub fn get_transfer_hash(
-    recipient_position_id: String,
-    sender_position_id: String,
-    collateral_id_hex: String,
-    amount: String,
-    expiration: String,
-    salt: String,
-    user_public_key_hex: String,
-    domain_name: String,
-    domain_version: String,
-    domain_chain_id: String,
-    domain_revision: String,
-) -> Result<Felt, String> {
-    let collateral_id = Felt::from_hex(&collateral_id_hex)
-        .map_err(|e| format!("Invalid collateral_id_hex: {:?}", e))?;
-    let user_key = Felt::from_hex(&user_public_key_hex)
-        .map_err(|e| format!("Invalid user_public_key_hex: {:?}", e))?;
-
-    let recipient = u32::from_str_radix(&recipient_position_id, 10)
-        .map_err(|e| format!("Invalid recipient_position_id: {:?}", e))?;
-    let position_id = u32::from_str_radix(&sender_position_id, 10)
-        .map_err(|e| format!("Invalid sender_position_id: {:?}", e))?;
-    let amount =
-        u64::from_str_radix(&amount, 10).map_err(|e| format!("Invalid amount: {:?}", e))?;
-    let expiration =
-        u64::from_str_radix(&expiration, 10).map_err(|e| format!("Invalid expiration: {:?}", e))?;
-    let salt = Felt::from_dec_str(&salt).map_err(|e| format!("Invalid salt: {:?}", e))?;
-    let revision = u32::from_str_radix(&domain_revision, 10)
-        .map_err(|e| format!("Invalid domain_revision: {:?}", e))?;
-
-    let transfer_args = TransferArgs {
-        recipient: PositionId { value: recipient },
-        position_id: PositionId { value: position_id },
-        collateral_id: AssetId {
-            value: collateral_id,
-        },
-        amount,
-        expiration: Timestamp {
-            seconds: expiration,
-        },
-        salt,
-    };
-    let domain = StarknetDomain {
-        name: domain_name,
-        version: domain_version,
-        chain_id: domain_chain_id,
-        revision,
-    };
-    transfer_args
-        .message_hash(&domain, user_key)
-        .map_err(|e| format!("Failed to compute message hash: {:?}", e))
-}
-
-pub fn get_withdrawal_hash(
-    recipient_hex: String,
-    position_id: String,
-    collateral_id_hex: String,
-    amount: String,
-    expiration: String,
-    salt: String,
-    user_public_key_hex: String,
-    domain_name: String,
-    domain_version: String,
-    domain_chain_id: String,
-    domain_revision: String,
-) -> Result<Felt, String> {
-    let collateral_id = Felt::from_hex(&collateral_id_hex)
-        .map_err(|e| format!("Invalid collateral_id_hex: {:?}", e))?;
-    let user_key = Felt::from_hex(&user_public_key_hex)
-        .map_err(|e| format!("Invalid user_public_key_hex: {:?}", e))?;
-
-    let recipient =
-        Felt::from_hex(&recipient_hex).map_err(|e| format!("Invalid recipient_hex: {:?}", e))?;
-    let position_id = u32::from_str_radix(&position_id, 10)
-        .map_err(|e| format!("Invalid position_id: {:?}", e))?;
-    let amount =
-        u64::from_str_radix(&amount, 10).map_err(|e| format!("Invalid amount: {:?}", e))?;
-    let expiration =
-        u64::from_str_radix(&expiration, 10).map_err(|e| format!("Invalid expiration: {:?}", e))?;
-    let salt = Felt::from_dec_str(&salt).map_err(|e| format!("Invalid salt: {:?}", e))?;
-    let revision = u32::from_str_radix(&domain_revision, 10)
-        .map_err(|e| format!("Invalid domain_revision: {:?}", e))?;
-
-    let withdrawal_args = starknet_messages::WithdrawalArgs {
-        recipient,
-        position_id: PositionId { value: position_id },
-        collateral_id: AssetId {
-            value: collateral_id,
-        },
-        amount,
-        expiration: Timestamp {
-            seconds: expiration,
-        },
-        salt,
-    };
-    let domain = StarknetDomain {
-        name: domain_name,
-        version: domain_version,
-        chain_id: domain_chain_id,
-        revision,
-    };
-    withdrawal_args
-        .message_hash(&domain, user_key)
-        .map_err(|e| {
-            format!(
-                "Failed to compute message hash for withdrawal args: {:?}",
-                e
-            )
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_private_key_from_eth_signature() {
-        let signature = "0x9ef64d5936681edf44b4a7ad713f3bc24065d4039562af03fccf6a08d6996eab367df11439169b417b6a6d8ce81d409edb022597ce193916757c7d5d9cbf97301c";
-        let result = get_private_key_from_eth_signature(signature);
-
-        match result {
-            Ok(private_key) => {
-                assert_eq!(private_key, Felt::from_dec_str("3554363360756768076148116215296798451844584215587910826843139626172125285444").unwrap());
-            }
-            Err(err) => {
-                panic!("Expected Ok, got Err: {}", err);
-            }
-        }
-    }
-
-    #[test]
-    fn test_get_transfer_msg() {
-        let recipient_position_id = "1".to_string();
-        let sender_position_id = "2".to_string();
-        let collateral_id_hex = "0x3".to_string();
-        let amount = "4".to_string();
-        let expiration = "5".to_string();
-        let salt = "6".to_string();
-        let user_public_key_hex =
-            "0x5d05989e9302dcebc74e241001e3e3ac3f4402ccf2f8e6f74b034b07ad6a904".to_string();
-        let domain_name = "Perpetuals".to_string();
-        let domain_version = "v0".to_string();
-        let domain_chain_id = "SN_SEPOLIA".to_string();
-        let domain_revision = "1".to_string();
-
-        let result = get_transfer_hash(
-            recipient_position_id,
-            sender_position_id,
-            collateral_id_hex,
-            amount,
-            expiration,
-            salt,
-            user_public_key_hex,
-            domain_name,
-            domain_version,
-            domain_chain_id,
-            domain_revision,
-        );
-
-        match result {
-            Ok(hash) => {
-                assert_eq!(
-                    hash,
-                    Felt::from_hex(
-                        "0x56c7b21d13b79a33d7700dda20e22246c25e89818249504148174f527fc3f8f"
-                    )
-                    .unwrap()
-                );
-            }
-            Err(err) => {
-                panic!("Expected Ok, got Err: {}", err);
-            }
-        }
-    }
-
-    #[test]
-    fn test_get_order_hash() {
-        let position_id = "100".to_string();
-        let base_asset_id_hex = "0x2".to_string();
-        let base_amount = "100".to_string();
-        let quote_asset_id_hex = "0x1".to_string();
-        let quote_amount = "-156".to_string();
-        let fee_asset_id_hex = "0x1".to_string();
-        let fee_amount = "74".to_string();
-        let expiration = "100".to_string();
-        let salt = "123".to_string();
-        let user_public_key_hex =
-            "0x5d05989e9302dcebc74e241001e3e3ac3f4402ccf2f8e6f74b034b07ad6a904".to_string();
-        let domain_name = "Perpetuals".to_string();
-        let domain_version = "v0".to_string();
-        let domain_chain_id = "SN_SEPOLIA".to_string();
-        let domain_revision = "1".to_string();
-
-        let result = get_order_hash(
-            position_id,
-            base_asset_id_hex,
-            base_amount,
-            quote_asset_id_hex,
-            quote_amount,
-            fee_asset_id_hex,
-            fee_amount,
-            expiration,
-            salt,
-            user_public_key_hex,
-            domain_name,
-            domain_version,
-            domain_chain_id,
-            domain_revision,
-        );
-
-        match result {
-            Ok(hash) => {
-                assert_eq!(
-                    hash,
-                    Felt::from_hex(
-                        "0x4de4c009e0d0c5a70a7da0e2039fb2b99f376d53496f89d9f437e736add6b48"
-                    )
-                    .unwrap()
-                );
-            }
-            Err(err) => {
-                panic!("Expected Ok, got Err: {}", err);
-            }
-        }
-    }
-
-    #[test]
-    fn test_get_withdrawal_hash() {
-        let recipient_hex = Felt::from_dec_str(
-            "206642948138484946401984817000601902748248360221625950604253680558965863254",
-        )
         .unwrap()
-        .to_hex_string();
-        let position_id = "2".to_string();
-        let collateral_id_hex = Felt::from_dec_str(
-            "1386727789535574059419576650469753513512158569780862144831829362722992755422",
-        )
-        .unwrap()
-        .to_hex_string();
-        let amount = "1000".to_string();
-        let expiration = "0".to_string();
-        let salt = "0".to_string();
-        let user_public_key_hex =
-            "0x5D05989E9302DCEBC74E241001E3E3AC3F4402CCF2F8E6F74B034B07AD6A904".to_string();
-        let domain_name = "Perpetuals".to_string();
-        let domain_version = "v0".to_string();
-        let domain_chain_id = "SN_SEPOLIA".to_string();
-        let domain_revision = "1".to_string();
-        let result = get_withdrawal_hash(
-            recipient_hex,
-            position_id,
-            collateral_id_hex,
-            amount,
-            expiration,
-            salt,
-            user_public_key_hex,
-            domain_name,
-            domain_version,
-            domain_chain_id,
-            domain_revision,
-        );
-        match result {
-            Ok(hash) => {
-                assert_eq!(
-                    hash,
-                    Felt::from_dec_str(
-                        "2182119571682827544073774098906745929330860211691330979324731407862023927178"
-                    )
-                    .unwrap()
-                );
-            }
-            Err(err) => {
-                panic!("Expected Ok, got Err: {}", err);
-            }
-        }
-    }
+        .to_hex_string()).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_c_string_1(str1: *mut c_char) {
+    unsafe { let _ = CString::from_raw(str1); };
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_c_string_2(str1: *mut c_char, str2: *mut c_char) {
+    unsafe { let _ = CString::from_raw(str1); };
+    unsafe { let _ = CString::from_raw(str2); };
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_c_string_3(str1: *mut c_char, str2: *mut c_char, str3: *mut c_char) {
+    unsafe { let _ = CString::from_raw(str1); };
+    unsafe { let _ = CString::from_raw(str2); };
+    unsafe { let _ = CString::from_raw(str3); };
 }

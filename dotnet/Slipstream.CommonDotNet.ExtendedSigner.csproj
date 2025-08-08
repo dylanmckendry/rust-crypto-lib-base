@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>Slipstream.CommonDotNet.ExtendedSigner</PackageId>
+    <Title>Slipstream CommonDotNet ExtendedSigner</Title>
+    <Description></Description>
+    <Version>0.0.13</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\target\x86_64-pc-windows-msvc\release\rust_crypto_lib_base.dll"
+          TargetPath="runtimes\win-x64\native\%(Filename)%(Extension)"
+          Pack="true"
+          PackagePath="runtimes\win-x64\native\">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+<!--     <None Include="..\target\x86_64-unknown-linux-gnu\release\librust_crypto_lib_base.so" -->
+<!--           TargetPath="runtimes\linux-x64\native\%(Filename)%(Extension)" -->
+<!--           Pack="true" -->
+<!--           PackagePath="runtimes\linux-x64\native\"> -->
+<!--       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> -->
+<!--     </None> -->
+  </ItemGroup>
+
+</Project>
